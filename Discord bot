@@ -1,0 +1,355 @@
+
+{
+  "name": "nova-guard",
+  "version": "1.0.0",
+  "description": "NOVA GUARD Discord Moderation Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^16.4.7"
+  }
+}
+
+require("dotenv").config();
+
+const {
+  Client,
+  GatewayIntentBits,
+  PermissionsBitField,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  EmbedBuilder
+} = require("discord.js");
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers
+  ]
+});
+
+const warnings = new Map();
+
+const commands = [
+  new SlashCommandBuilder()
+    .setName("help")
+    .setDescription("Show all bot commands"),
+
+  new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Check bot latency"),
+
+  new SlashCommandBuilder()
+    .setName("warn")
+    .setDescription("Warn a member")
+    .addUserOption(o =>
+      o.setName("member").setDescription("Member").setRequired(true))
+    .addStringOption(o =>
+      o.setName("reason").setDescription("Reason").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("warnings")
+    .setDescription("Check member warnings")
+    .addUserOption(o =>
+      o.setName("member").setDescription("Member").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("clear")
+    .setDescription("Delete messages")
+    .addIntegerOption(o =>
+      o.setName("amount").setDescription("1 to 100").setMinValue(1).setMaxValue(100).setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("kick")
+    .setDescription("Kick a member")
+    .addUserOption(o =>
+      o.setName("member").setDescription("Member").setRequired(true))
+    .addStringOption(o =>
+      o.setName("reason").setDescription("Reason").setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName("ban")
+    .setDescription("Ban a member")
+    .addUserOption(o =>
+      o.setName("member").setDescription("Member").setRequired(true))
+    .addStringOption(o =>
+      o.setName("reason").setDescription("Reason").setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName("timeout")
+    .setDescription("Timeout a member")
+    .addUserOption(o =>
+      o.setName("member").setDescription("Member").setRequired(true))
+    .addIntegerOption(o =>
+      o.setName("minutes").setDescription("Duration in minutes").setMinValue(1).setMaxValue(40320).setRequired(true))
+    .addStringOption(o =>
+      o.setName("reason").setDescription("Reason").setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName("untimeout")
+    .setDescription("Remove member timeout")
+    .addUserOption(o =>
+      o.setName("member").setDescription("Member").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("lock")
+    .setDescription("Lock current channel"),
+
+  new SlashCommandBuilder()
+    .setName("unlock")
+    .setDescription("Unlock current channel"),
+
+  new SlashCommandBuilder()
+    .setName("userinfo")
+    .setDescription("Show member information")
+    .addUserOption(o =>
+      o.setName("member").setDescription("Member").setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName("serverinfo")
+    .setDescription("Show server information")
+].map(c => c.toJSON());
+
+const rest = new REST({ version: "10" }).setToken(process.env.BOT_TOKEN);
+
+client.once("ready", async () => {
+  console.log(`NOVA GUARD ONLINE: ${client.user.tag}`);
+
+  try {
+    await rest.put(
+      Routes.applicationGuildCommands(
+        process.env.CLIENT_ID,
+        process.env.GUILD_ID
+      ),
+      { body: commands }
+    );
+    console.log("Slash commands registered!");
+  } catch (error) {
+    console.error("Command registration error:", error);
+  }
+});
+
+function makeEmbed(title, description, color = 0x5865F2) {
+  return new EmbedBuilder()
+    .setColor(color)
+    .setTitle(title)
+    .setDescription(description)
+    .setFooter({ text: "NOVA GUARD • Security System" })
+    .setTimestamp();
+}
+
+async function moderator(interaction, permission) {
+  if (!interaction.memberPermissions?.has(permission)) {
+    await interaction.reply({
+      content: "❌ You don't have permission to use this command.",
+      ephemeral: true
+    });
+    return false;
+  }
+  return true;
+}
+
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const { commandName } = interaction;
+
+  try {
+    if (commandName === "help") {
+      return interaction.reply({
+        embeds: [makeEmbed(
+          "🛡️ NOVA GUARD COMMANDS",
+          "**General**\n/ping\n/help\n/userinfo\n/serverinfo\n\n" +
+          "**Moderation**\n/warn\n/warnings\n/clear\n/kick\n/ban\n/timeout\n/untimeout\n\n" +
+          "**Channel Management**\n/lock\n/unlock"
+        )]
+      });
+    }
+
+    if (commandName === "ping") {
+      return interaction.reply({
+        embeds: [makeEmbed("🏓 PONG!", `Latency: ${client.ws.ping}ms`)]
+      });
+    }
+
+    if (commandName === "userinfo") {
+      const user = interaction.options.getUser("member") || interaction.user;
+      const member = await interaction.guild.members.fetch(user.id);
+
+      return interaction.reply({
+        embeds: [makeEmbed(
+          "👤 USER INFORMATION",
+          `**Username:** ${user.tag}\n` +
+          `**ID:** ${user.id}\n` +
+          `**Joined:** ${member.joinedAt?.toDateString() || "Unknown"}\n` +
+          `**Created:** ${user.createdAt.toDateString()}`,
+        )]
+      });
+    }
+
+    if (commandName === "serverinfo") {
+      const guild = interaction.guild;
+      return interaction.reply({
+        embeds: [makeEmbed(
+          "🏰 SERVER INFORMATION",
+          `**Name:** ${guild.name}\n` +
+          `**Members:** ${guild.memberCount}\n` +
+          `**Owner:** <@${guild.ownerId}>\n` +
+          `**Server ID:** ${guild.id}\n` +
+          `**Created:** ${guild.createdAt.toDateString()}`
+        )]
+      });
+    }
+
+    if (commandName === "warn") {
+      if (!await moderator(interaction, PermissionsBitField.Flags.ModerateMembers)) return;
+
+      const user = interaction.options.getUser("member");
+      const reason = interaction.options.getString("reason");
+      const member = await interaction.guild.members.fetch(user.id);
+
+      if (member.id === interaction.user.id || member.id === interaction.guild.ownerId ||
+          member.roles.highest.position >= interaction.member.roles.highest.position) {
+        return interaction.reply({ content: "❌ You cannot warn this member.", ephemeral: true });
+      }
+
+      const list = warnings.get(user.id) || [];
+      list.push({ reason, moderator: interaction.user.id, date: new Date() });
+      warnings.set(user.id, list);
+
+      return interaction.reply({
+        embeds: [makeEmbed(
+          "⚠️ MEMBER WARNED",
+          `**Member:** ${user.tag}\n**Reason:** ${reason}\n**Total Warnings:** ${list.length}`,
+          0xFFA500
+        )]
+      });
+    }
+
+    if (commandName === "warnings") {
+      const user = interaction.options.getUser("member");
+      const list = warnings.get(user.id) || [];
+
+      const description = list.length
+        ? list.map((w, i) => `**${i + 1}.** ${w.reason}`).join("\n")
+        : "No warnings found.";
+
+      return interaction.reply({
+        embeds: [makeEmbed(`⚠️ ${user.tag} WARNINGS`, description)]
+      });
+    }
+
+    if (commandName === "clear") {
+      if (!await moderator(interaction, PermissionsBitField.Flags.ManageMessages)) return;
+
+      const amount = interaction.options.getInteger("amount");
+
+      if (!interaction.channel.isTextBased() ||
+          !interaction.channel.messages) {
+        return interaction.reply({ content: "Invalid channel.", ephemeral: true });
+      }
+
+      const deleted = await interaction.channel.bulkDelete(amount, true);
+
+      return interaction.reply({
+        content: `🧹 Deleted ${deleted.size} messages.`,
+        ephemeral: true
+      });
+    }
+
+    if (["kick", "ban", "timeout", "untimeout"].includes(commandName)) {
+      const permission = commandName === "kick"
+        ? PermissionsBitField.Flags.KickMembers
+        : commandName === "ban"
+        ? PermissionsBitField.Flags.BanMembers
+        : PermissionsBitField.Flags.ModerateMembers;
+
+      if (!await moderator(interaction, permission)) return;
+
+      const user = interaction.options.getUser("member");
+      const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+
+      if (!member) {
+        return interaction.reply({ content: "❌ Member not found.", ephemeral: true });
+      }
+
+      if (
+        member.id === interaction.user.id ||
+        member.id === interaction.guild.ownerId ||
+        member.roles.highest.position >= interaction.member.roles.highest.position ||
+        !member.manageable
+      ) {
+        return interaction.reply({
+          content: "❌ You cannot moderate this member. Check role hierarchy.",
+          ephemeral: true
+        });
+      }
+
+      if (commandName === "kick") {
+        const reason = interaction.options.getString("reason") || "No reason provided";
+        await member.kick(reason);
+        return interaction.reply(`👢 **${user.tag}** has been kicked.`);
+      }
+
+      if (commandName === "ban") {
+        const reason = interaction.options.getString("reason") || "No reason provided";
+        if (!member.bannable) {
+          return interaction.reply({ content: "❌ I cannot ban this member.", ephemeral: true });
+        }
+        await member.ban({ reason });
+        return interaction.reply(`🔨 **${user.tag}** has been banned.`);
+      }
+
+      if (commandName === "timeout") {
+        const minutes = interaction.options.getInteger("minutes");
+        const reason = interaction.options.getString("reason") || "No reason provided";
+        await member.timeout(minutes * 60 * 1000, reason);
+        return interaction.reply(`⏳ **${user.tag}** timed out for ${minutes} minutes.`);
+      }
+
+      if (commandName === "untimeout") {
+        await member.timeout(null);
+        return interaction.reply(`✅ Timeout removed for **${user.tag}**.`);
+      }
+    }
+
+    if (commandName === "lock" || commandName === "unlock") {
+      if (!await moderator(interaction, PermissionsBitField.Flags.ManageChannels)) return;
+
+      const channel = interaction.channel;
+      await channel.permissionOverwrites.edit(
+        interaction.guild.roles.everyone,
+        {
+          SendMessages: commandName === "unlock" ? null : false
+        }
+      );
+
+      return interaction.reply(
+        commandName === "lock"
+          ? "🔒 Channel locked."
+          : "🔓 Channel unlocked."
+      );
+    }
+
+  } catch (error) {
+    console.error(error);
+
+    const response = {
+      content: "❌ Something went wrong. Check bot permissions and try again.",
+      ephemeral: true
+    };
+
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp(response).catch(() => {});
+    } else {
+      await interaction.reply(response).catch(() => {});
+    }
+  }
+});
+
+client.login(process.env.BOT_TOKEN);
